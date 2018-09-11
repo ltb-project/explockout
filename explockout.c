@@ -36,9 +36,9 @@
 #include <ac/string.h>
 #include <ac/ctype.h>
 #include "config.h"
-#include <regex.h>
 
 
+#define ATTR_PWDFAILURETIME                "pwdFailureTime"
 #define ATTR_NAME_MAX_LEN                  150
 
 /* Per-instance configuration information */
@@ -54,6 +54,9 @@ typedef struct explockout_info {
 	/* maximum waiting time at any time */
 	int maxtime;
 } explockout_info;
+
+/* Attribute Description pwdFailureTime */
+static AttributeDescription *ad_pwdFailureTime;
 
 
 /* configuration attribute and objectclass */
@@ -101,114 +104,12 @@ parse_time( char *atm )
 	return ret;
 }
 
-
-int
-countPwdFailureTime( Attribute *attrs )
-{
-    char desc[ATTR_NAME_MAX_LEN];
-    int num = 0;
-    char *desc_val;
-    int desc_len;
-
-    // regex variables
-    regex_t regex;
-    int reti;
-    // Compile regular expression
-    reti = regcomp(&regex, "pwdFailureTime", REG_ICASE );
-
-    while( attrs->a_next != NULL )
-    {
-        desc_val = attrs->a_desc->ad_cname.bv_val;
-        desc_len = (int) attrs->a_desc->ad_cname.bv_len;
-        strncpy(desc,desc_val,desc_len);
-        desc[desc_len]='\0';
-
-        // Execute regular expression
-        reti = regexec(&regex, desc, 0, NULL, 0);
-        if (!reti)
-        {
-            // Found pwdFailureTime attribute
-            // Count number of values
-            num = attrs->a_numvals;
-            break;
-        }
-
-        attrs = attrs->a_next;
-    }
-
-    regfree(&regex);
-
-    Debug( LDAP_DEBUG_ANY, "explockout: Number of failed authentication: %d", num, 0, 0);
-    return num;
-}
-
-// Get last pwdFailureTime value in user entry
-void
-getLastPwdFailureTime( Attribute *attrs )
-{
-    char desc[ATTR_NAME_MAX_LEN];
-    char val[15];
-    int num = 0;
-    char *desc_val;
-    int desc_len;
-    char *value_val;
-    int value_len;
-    int i,j;
-
-    // regex variables
-    regex_t regex;
-    int reti;
-    // Compile regular expression
-    reti = regcomp(&regex, "pwdFailureTime", REG_ICASE );
-
-    while( attrs->a_next != NULL )
-    {
-        desc_val = attrs->a_desc->ad_cname.bv_val;
-        desc_len = (int) attrs->a_desc->ad_cname.bv_len;
-        strncpy(desc,desc_val,desc_len);
-        desc[desc_len]='\0';
-
-        // Execute regular expression
-        reti = regexec(&regex, desc, 0, NULL, 0);
-        if (!reti)
-        {
-            // Found pwdFailureTime attribute
-            // Get all values
-            num = attrs->a_numvals;
-            for(i=0 ; i< num ; i++)
-            {
-                value_val = attrs->a_vals[i].bv_val;
-                value_len = attrs->a_vals[i].bv_len;
-                if(value_len < 14)
-                {
-                    Debug( LDAP_DEBUG_ANY, "explockout: pwdFailureTime has insufficient digits (14)", 0, 0, 0);
-                    exit(EXIT_FAILURE);
-                }
-                // check if new value is superior
-                for(j=0 ; j<14 ; j++)
-                {
-                    if(value_val[j] > val[j])
-                    {
-                        strncpy(val,value_val,14);
-                        val[14]='\0';
-                        break;
-                    }
-                    else if(value_val[j] < val[j])
-                    {
-                        break;
-                    }
-                }
-            }
-            Debug( LDAP_DEBUG_ANY, "explockout: last failed authentication: %s", val, 0, 0);
-            break;
-        }
-
-        attrs = attrs->a_next;
-    }
-
-    regfree(&regex);
-
-}
+int power(int base, unsigned int exp) {
+    int i, result = 1;
+    for (i = 0; i < exp; i++)
+        result *= base;
+    return result;
+ }
 
 
 static int
@@ -218,6 +119,10 @@ explockout_bind_response( Operation *op, SlapReply *rs )
 	Entry *e;
 	int rc;
 	int nb_pwdFailureTime = 0;
+	time_t now, pwdftime = (time_t)-1;
+	Attribute *a;
+	int i;
+	int delay = 0;
 
 	/* we're only interested if the bind was successful */
 	/*if ( rs->sr_err != LDAP_SUCCESS )
@@ -230,82 +135,55 @@ explockout_bind_response( Operation *op, SlapReply *rs )
 		return SLAP_CB_CONTINUE;
 	}
 
-	{
-		// get configuration parameters
-		explockout_info *lbi = (explockout_info *) op->o_callback->sc_private;
+	// get configuration parameters
+	explockout_info *lbi = (explockout_info *) op->o_callback->sc_private;
 
-		time_t now, bindtime = (time_t)-1;
-		Attribute *a;
-		Modifications *m;
-		char nowstr[ LDAP_LUTIL_GENTIME_BUFSIZE ];
-		struct berval timestamp;
+	/* get the current time */
+	now = slap_get_time();
 
-		/* get the current time */
-		now = slap_get_time();
+	Debug( LDAP_DEBUG_ANY, "explockout: basetime: %d\n", lbi->basetime, 0, 0 );
+	Debug( LDAP_DEBUG_ANY, "explockout: maxtime: %d\n", lbi->maxtime, 0, 0 );
 
-		Debug( LDAP_DEBUG_ANY, "explockout: basetime: %d\n", lbi->basetime, 0, 0 );
-		Debug( LDAP_DEBUG_ANY, "explockout: maxtime: %d\n", lbi->maxtime, 0, 0 );
+	/* get pwdFailureTime attribute, if it exists */
+	if ((a = attr_find( e->e_attrs, ad_pwdFailureTime)) != NULL) {
+		nb_pwdFailureTime = a->a_numvals;
 
-		nb_pwdFailureTime = countPwdFailureTime( e->e_attrs );
+		Debug( LDAP_DEBUG_ANY, "explockout: nb of pwdFailureTime: %d\n",
+			nb_pwdFailureTime, 0, 0 );
 
-/*
-// send deny
-send_ldap_error( op, rs, LDAP_UNWILLING_TO_PERFORM,
-"operation not allowed within namingContext" );
-*/
+		// Compute exponential time
+		delay = power(lbi->basetime, nb_pwdFailureTime);
+		if( delay > lbi->maxtime )
+		{
+			delay = lbi->maxtime;
+		}
+		Debug( LDAP_DEBUG_ANY, "explockout: computed waiting time: %d\n",
+			delay, 0, 0 );
 
-		/* get authTimestamp attribute, if it exists */
-		/*if ((a = attr_find( e->e_attrs, ad_authTimestamp)) != NULL) {
-			bindtime = parse_time( a->a_nvals[0].bv_val );
+		// For each pwdFailureTime, verify that
+		// exponential time + pwdFailureTime < now
+		for(i=0 ; i < nb_pwdFailureTime ; i++)
+		{
+			Debug( LDAP_DEBUG_ANY, "explockout: verifying pwdFailureTime: %s\n",
+				a->a_nvals[i].bv_val, 0, 0 );
+						
+			pwdftime = parse_time( a->a_nvals[i].bv_val );
+			if( now < (pwdftime + delay) )
+			{
+				Debug( LDAP_DEBUG_ANY,
+					"explockout: error, you should wait for %d seconds before you can authenticate again\n",
+					(pwdftime + delay - now), 0, 0 );
+				/*
+				// send deny
+				send_ldap_error( op, rs, LDAP_UNWILLING_TO_PERFORM,
+						"operation not allowed within namingContext" );
+				*/
 
-			if (bindtime != (time_t)-1) {
-				// if the recorded bind time is within our precision, we're done
-				// it doesn't need to be updated (save a write for nothing)
-				if ((now - bindtime) < lbi->timestamp_precision) {
-					goto done;
-				}
 			}
 		}
-
-		// update the authTimestamp in the user's entry with the current time
-		timestamp.bv_val = nowstr;
-		timestamp.bv_len = sizeof(nowstr);
-		slap_timestamp( &now, &timestamp );
-
-		m = ch_calloc( sizeof(Modifications), 1 );
-		m->sml_op = LDAP_MOD_REPLACE;
-		m->sml_flags = 0;
-		m->sml_type = ad_authTimestamp->ad_cname;
-		m->sml_desc = ad_authTimestamp;
-		m->sml_numvals = 1;
-		m->sml_values = ch_calloc( sizeof(struct berval), 2 );
-		m->sml_nvalues = ch_calloc( sizeof(struct berval), 2 );
-
-		ber_dupbv( &m->sml_values[0], &timestamp );
-		ber_dupbv( &m->sml_nvalues[0], &timestamp );
-		m->sml_next = mod;
-		mod = m;*/
 	}
 
-done:
 	be_entry_release_r( op, e );
-
-	/* perform the update, if necessary */
-	/*if ( mod ) {
-		Operation op2 = *op;
-		SlapReply r2 = { REP_RESULT };
-		slap_callback cb = { NULL, slap_null_cb, NULL, NULL };
-
-		// This is a DSA-specific opattr, it never gets replicated.
-		op2.o_tag = LDAP_REQ_MODIFY;
-		op2.o_callback = &cb;
-		op2.orm_modlist = mod;
-		op2.o_dn = op->o_bd->be_rootdn;
-		op2.o_ndn = op->o_bd->be_rootndn;
-		op2.o_dont_replicate = 1;
-		rc = op->o_bd->be_modify( &op2, &r2 );
-		slap_mods_free( mod, 1 );
-	}*/
 
 	op->o_bd->bd_info = bi;
 	return SLAP_CB_CONTINUE;
@@ -329,11 +207,21 @@ explockout_bind( Operation *op, SlapReply *rs )
 }
 
 static int
-explockout_db_init(
-	BackendDB *be,
-	ConfigReply *cr
-)
+explockout_db_init(BackendDB *be, ConfigReply *cr)
 {
+	const char *err_msg;
+
+	// register pwdFailureTime description
+	if ( slap_str2ad( ATTR_PWDFAILURETIME, &ad_pwdFailureTime, &err_msg )
+	     != LDAP_SUCCESS )
+	{
+        	Debug( LDAP_DEBUG_ANY,
+			"explockout: attribute '%s': %s.\n",
+			ATTR_PWDFAILURETIME,
+			err_msg, 0 );
+        	return -1;
+	}
+
 	slap_overinst *on = (slap_overinst *) be->bd_info;
 
 	/* initialize private structure to store configuration */
