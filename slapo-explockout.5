@@ -52,6 +52,9 @@ overlay must be prefixed by
 to avoid potential conflicts with directives specific to the underlying 
 database or to other stacked overlays.
 
+.B Important:
+The overlay must be called before ppolicy, else the ppolicy is going to change pwdFailureTime before explockout can deny authentication.
+
 .TP
 .B overlay explockout
 This directive adds the
@@ -86,24 +89,27 @@ This example configures the
 .B explockout
 overlay to wait for 3 ^ (number of pwdFailureTime) seconds
 before the user can authenticate again after failed attempts.
-The user should not wait for more than 15 minutes (900 s)
+The user should not wait for more than 15 minutes (900 s).
+
 Add the following to
 .BR slapd.conf (5):
 
 .LP
 .nf
+    modulepath /path/to/openldap/modules
+    moduleload explockout.la
+    # ...
+
     database <database>
     # ...
 
     overlay explockout
     explockout-basetime 3
     explockout-maxtime 900
+
+    overlay ppolicy
 .fi
 .LP
-.B slapd
-must also load
-.B explockout.la,
-if compiled as a run-time module;
 
 .SH FILES
 .TP
