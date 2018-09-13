@@ -109,13 +109,15 @@ int power(int base, unsigned int exp) {
     for (i = 0; i < exp; i++)
         result *= base;
     return result;
- }
+}
+
 
 
 static int
-explockout_bind_response( Operation *op, SlapReply *rs )
+explockout_bind( Operation *op, SlapReply *rs )
 {
-	BackendInfo *bi = op->o_bd->bd_info;
+
+	slap_overinst *on = (slap_overinst *) op->o_bd->bd_info;
 	Entry *e;
 	int rc;
 	int nb_pwdFailureTime = 0;
@@ -124,19 +126,15 @@ explockout_bind_response( Operation *op, SlapReply *rs )
 	int i;
 	int delay = 0;
 
-	/* we're only interested if the bind was successful */
-	/*if ( rs->sr_err != LDAP_SUCCESS )
-		return SLAP_CB_CONTINUE;*/
-
-	rc = be_entry_get_rw( op, &op->o_req_ndn, NULL, NULL, 0, &e );
-	op->o_bd->bd_info = bi;
+	rc = overlay_entry_get_ov( op, &op->o_req_ndn, NULL, NULL, 0, &e, on );
 
 	if ( rc != LDAP_SUCCESS ) {
+		overlay_entry_release_ov( op, e, 0, on );
 		return SLAP_CB_CONTINUE;
 	}
 
 	// get configuration parameters
-	explockout_info *lbi = (explockout_info *) op->o_callback->sc_private;
+	explockout_info *lbi = (explockout_info *) on->on_bi.bi_private;
 
 	/* get the current time */
 	now = slap_get_time();
@@ -173,37 +171,23 @@ explockout_bind_response( Operation *op, SlapReply *rs )
 				Debug( LDAP_DEBUG_ANY,
 					"explockout: error, you should wait for %d seconds before you can authenticate again\n",
 					(pwdftime + delay - now), 0, 0 );
-				/*
+
 				// send deny
-				send_ldap_error( op, rs, LDAP_UNWILLING_TO_PERFORM,
-						"operation not allowed within namingContext" );
-				*/
+				// The call to send_ldap_error ends this function
+				// nothing will be executed after
+				overlay_entry_release_ov( op, e, 0, on );
+				send_ldap_error( op, rs, LDAP_INVALID_CREDENTIALS,
+						"password locked" );
+				return LDAP_INVALID_CREDENTIALS;
 
 			}
 		}
 	}
 
-	be_entry_release_r( op, e );
-
-	op->o_bd->bd_info = bi;
+	overlay_entry_release_ov( op, e, 0, on );
 	return SLAP_CB_CONTINUE;
-}
 
-static int
-explockout_bind( Operation *op, SlapReply *rs )
-{
-	slap_callback *cb;
-	slap_overinst *on = (slap_overinst *) op->o_bd->bd_info;
 
-	/* setup a callback to intercept result of this bind operation
-	 * and pass along the explockout_info struct */
-	cb = op->o_tmpcalloc( sizeof(slap_callback), 1, op->o_tmpmemctx );
-	cb->sc_response = explockout_bind_response;
-	cb->sc_next = op->o_callback->sc_next;
-	cb->sc_private = on->on_bi.bi_private;
-	op->o_callback->sc_next = cb;
-
-	return SLAP_CB_CONTINUE;
 }
 
 static int
@@ -250,19 +234,6 @@ static slap_overinst explockout;
 int explockout_initialize()
 {
 	int code;
-
-	// int i;
-	/* register operational schema for this overlay (authTimestamp attribute) */
-	/*for (i=0; expLockout_OpSchema[i].def; i++) {
-		code = register_at( expLockout_OpSchema[i].def, expLockout_OpSchema[i].ad, 0 );
-		if ( code ) {
-			Debug( LDAP_DEBUG_ANY,
-				"explockout_initialize: register_at failed\n", 0, 0, 0 );
-			return code;
-		}
-	}
-
-	ad_authTimestamp->ad_type->sat_flags |= SLAP_AT_MANAGEABLE;*/
 
 	explockout.on_bi.bi_type = "explockout";
 	explockout.on_bi.bi_db_init = explockout_db_init;
