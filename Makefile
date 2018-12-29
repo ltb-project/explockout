@@ -6,10 +6,8 @@ CC=gcc
 
 # Path of OpenLDAP sources
 OLDAP_SOURCES=../../..
-# Where the explockout configuration file should be installed
-CONFIG=/opt/openldap-2.4.46-el/etc/openldap/explockout.conf
 # Path of OpenLDAP installed libs, where the explockout library should be installed
-LIBDIR=/opt/openldap-2.4.46-el/lib64
+LIBDIR=/opt/openldap/lib64
 LIBTOOL = $(OLDAP_SOURCES)/libtool
 DEFS = -DSLAPD_OVER_EXPLOCKOUT=SLAPD_MOD_DYNAMIC
 
