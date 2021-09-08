@@ -111,6 +111,10 @@ Add the following to
 .fi
 .LP
 
+.SH LIMITATIONS
+.TP
+The overlay works in conjunction with the ppolicy overlay. As a consequence, when the authentication is still locked by explockout, a new authentication, even if valid, will result in a new pwdFailureTime. In other words, new authentications (even valid ones) to a locked acccount are going to increment the time to wait.
+
 .SH FILES
 .TP
 ETCDIR/slapd.conf

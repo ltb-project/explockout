@@ -125,6 +125,7 @@ explockout_bind( Operation *op, SlapReply *rs )
 	Attribute *a;
 	int i;
 	int delay = 0;
+	int future_delay = 0;
 	char result[1024];
 
 	rc = overlay_entry_get_ov( op, &op->o_req_ndn, NULL, NULL, 0, &e, on );
@@ -140,14 +141,14 @@ explockout_bind( Operation *op, SlapReply *rs )
 	/* get the current time */
 	now = slap_get_time();
 
-	Log1(LDAP_DEBUG_ANY, LDAP_LEVEL_DEBUG, "explockout: basetime: %d\n", lbi->basetime );
-	Log1(LDAP_DEBUG_ANY, LDAP_LEVEL_DEBUG, "explockout: maxtime: %d\n", lbi->maxtime);
+	Debug( LDAP_DEBUG_ANY, "explockout: basetime: %d\n", lbi->basetime );
+	Debug( LDAP_DEBUG_ANY, "explockout: maxtime:  %d\n", lbi->maxtime );
 
 	/* get pwdFailureTime attribute, if it exists */
 	if ((a = attr_find( e->e_attrs, ad_pwdFailureTime)) != NULL) {
 		nb_pwdFailureTime = a->a_numvals;
 
-		Log1(LDAP_DEBUG_ANY, LDAP_LEVEL_DEBUG, "explockout: nb of pwdFailureTime: %d\n", nb_pwdFailureTime);
+		Debug( LDAP_DEBUG_ANY, "explockout: nb of pwdFailureTime: %d\n", nb_pwdFailureTime );
 
 		// Compute exponential time
 		delay = power(lbi->basetime, nb_pwdFailureTime);
@@ -155,22 +156,32 @@ explockout_bind( Operation *op, SlapReply *rs )
 		{
 			delay = lbi->maxtime;
 		}
-		Log1(LDAP_DEBUG_ANY, LDAP_LEVEL_DEBUG, "explockout: computed waiting time: %d\n", delay);
+		Debug( LDAP_DEBUG_ANY, "explockout: computed waiting time (determine if password is still locked): %d\n", delay );
+
+		// Compute future_delay = base ^ (nb of pwdFailureTime + 1)
+		// if password is locked by explockout, then explockout will make this authentication as failed
+		// thus, as ppolicy overlay will consider this authentication as failed, one more pwdFailureTime will be recorded
+		future_delay = power(lbi->basetime, (nb_pwdFailureTime+1));
+		if( future_delay > lbi->maxtime )
+		{
+			future_delay = lbi->maxtime;
+		}
+		Debug( LDAP_DEBUG_ANY, "explockout: computed future waiting time (if current authentication is locked or failed): %d\n", future_delay );
 
 		// For each pwdFailureTime, verify that
 		// exponential time + pwdFailureTime < now
 		for(i=0 ; i < nb_pwdFailureTime ; i++)
 		{
-			Log1( LDAP_DEBUG_ANY, LDAP_LEVEL_DEBUG, "explockout: verifying pwdFailureTime: %s\n",  a->a_nvals[i].bv_val );
-						
+			Debug( LDAP_DEBUG_ANY, "explockout: verifying pwdFailureTime: %s\n", a->a_nvals[i].bv_val );
+
 			pwdftime = parse_time( a->a_nvals[i].bv_val );
 			if( now < (pwdftime + delay) )
 			{
-				Log1( LDAP_DEBUG_ANY, LDAP_LEVEL_ERR, "explockout: error, you should wait for %d seconds before you can authenticate again\n", (int)(pwdftime + delay - now) );
+				Debug( LDAP_DEBUG_ANY, "explockout: error, you should wait for %d seconds before you can authenticate again\n", (int)(pwdftime + future_delay - now) );
 
 				// send deny
 				overlay_entry_release_ov( op, e, 0, on );
-				sprintf(result, "password locked! You should wait %d seconds", (int)(pwdftime + delay - now));
+				sprintf(result, "password locked! You should wait %d seconds", (int)(pwdftime + future_delay - now));
 				send_ldap_error( op, rs, LDAP_INVALID_CREDENTIALS, result );
 				return LDAP_INVALID_CREDENTIALS;
 
