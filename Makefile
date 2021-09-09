@@ -9,7 +9,7 @@ OLDAP_SOURCES=..
 # Final path of explockout installed
 LIBDIR=/usr/local/openldap/libexec/openldap
 # Where to deploy explockout overlay for now
-DSTDIR=/opt/openldap-deb/debian/paquet-openldap-debian/openldap-ltb-2.4.47/debian/tmp/usr/local/openldap/libexec/openldap
+DSTDIR=/usr/local/openldap/libexec/openldap
 LIBTOOL = $(OLDAP_SOURCES)/libtool
 DEFS = -DSLAPD_OVER_EXPLOCKOUT=SLAPD_MOD_DYNAMIC
 
