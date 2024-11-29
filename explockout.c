@@ -204,7 +204,7 @@ explockout_db_init(BackendDB *be, ConfigReply *cr)
 	if ( slap_str2ad( ATTR_PWDFAILURETIME, &ad_pwdFailureTime, &err_msg )
 	     != LDAP_SUCCESS )
 	{
-		Log2( LDAP_DEBUG_ANY, LDAP_LEVEL_ERR, "explockout: attribute '%s': %s.\n", ATTR_PWDFAILURETIME, err_msg );
+		Log( LDAP_DEBUG_ANY, LDAP_LEVEL_ERR, "explockout: attribute '%s': %s.\n", ATTR_PWDFAILURETIME, err_msg );
         	return -1;
 	}
 
